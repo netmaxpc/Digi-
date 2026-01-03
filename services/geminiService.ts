@@ -4,12 +4,13 @@ import { GoogleGenAI, Type, Modality, FunctionDeclaration } from "@google/genai"
 const getClient = () => new GoogleGenAI({ apiKey: process.env.API_KEY });
 
 /**
- * Multimodal Understanding using Gemini 3 Flash
+ * High-fidelity Multimodal Understanding using Gemini 3 Pro
+ * Optimized for complex video and image analysis.
  */
 export async function analyzeMultimodal(prompt: string, fileData: string, mimeType: string): Promise<string> {
   const ai = getClient();
   const response = await ai.models.generateContent({
-    model: 'gemini-3-flash-preview',
+    model: 'gemini-3-pro-preview',
     contents: {
       parts: [
         { inlineData: { data: fileData.split(',')[1], mimeType } },
@@ -22,6 +23,7 @@ export async function analyzeMultimodal(prompt: string, fileData: string, mimeTy
 
 /**
  * Complex Reasoning using Gemini 3 Pro (Thinking Mode)
+ * thinkingBudget set to 32768 for maximum depth.
  */
 export async function solveComplexProblem(prompt: string): Promise<string> {
   const ai = getClient();
@@ -36,16 +38,28 @@ export async function solveComplexProblem(prompt: string): Promise<string> {
 }
 
 /**
- * Low Latency Response
+ * Low Latency Fast Triage using Gemini Flash Lite
  */
 export async function fastTriage(prompt: string): Promise<string> {
   const ai = getClient();
-  // Using corrected model name for flash lite as per guidelines
   const response = await ai.models.generateContent({
     model: 'gemini-flash-lite-latest',
     contents: prompt,
   });
   return response.text || "";
+}
+
+/**
+ * Start a streaming chat session with Gemini 3 Pro
+ */
+export async function startNeuralChat(systemInstruction: string) {
+  const ai = getClient();
+  return ai.chats.create({
+    model: 'gemini-3-pro-preview',
+    config: {
+      systemInstruction: systemInstruction,
+    }
+  });
 }
 
 /**
@@ -140,7 +154,7 @@ export async function editImage(prompt: string, base64Image: string, mimeType: s
 }
 
 /**
- * Text to Speech
+ * Text to Speech using Gemini 2.5 Flash TTS
  */
 export async function speakResponse(text: string): Promise<void> {
   const ai = getClient();
@@ -169,7 +183,6 @@ export async function speakResponse(text: string): Promise<void> {
  * Video Generation (Veo)
  */
 export async function generateVeoVideo(prompt: string, image?: string, aspectRatio: '16:9' | '9:16' = '16:9'): Promise<string | null> {
-  // Creating a new instance right before call as per guidelines
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   let operation = await ai.models.generateVideos({
     model: 'veo-3.1-fast-generate-preview',
@@ -205,7 +218,6 @@ export async function harvestIdentity(name: string): Promise<string> {
 }
 
 // Audio Utilities
-// decode manually implements base64 to bytes conversion
 export function decode(base64: string) {
   const binaryString = atob(base64);
   const bytes = new Uint8Array(binaryString.length);
@@ -215,7 +227,6 @@ export function decode(base64: string) {
   return bytes;
 }
 
-// encode manually implements bytes to base64 conversion
 export function encode(bytes: Uint8Array) {
   let binary = '';
   for (let i = 0; i < bytes.byteLength; i++) {
@@ -224,7 +235,6 @@ export function encode(bytes: Uint8Array) {
   return btoa(binary);
 }
 
-// decodeAudioData decodes raw PCM audio bytes to AudioBuffer
 export async function decodeAudioData(data: Uint8Array, ctx: AudioContext, sampleRate: number, numChannels: number): Promise<AudioBuffer> {
   const dataInt16 = new Int16Array(data.buffer);
   const frameCount = dataInt16.length / numChannels;

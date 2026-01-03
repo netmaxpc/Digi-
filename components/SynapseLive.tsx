@@ -1,35 +1,57 @@
 
 import { GoogleGenAI } from "@google/genai";
 import React, { useState, useRef, useEffect } from 'react';
-import { decode, encode, decodeAudioData, SYNAPSE_TOOLS } from '../services/geminiService';
+import { decode, encode, decodeAudioData, SYNAPSE_TOOLS, fastTriage } from '../services/geminiService';
 import { LiveServerMessage, Modality } from '@google/genai';
 import { Task, UserProfile } from '../types';
+
+interface ActivityLog {
+  id: string;
+  type: 'protocol' | 'intel' | 'sync';
+  title: string;
+  detail: string;
+  time: string;
+}
 
 interface SynapseLiveProps {
   profile: UserProfile;
   onAddTask: (task: Omit<Task, 'id' | 'createdAt' | 'status'>) => void;
+  onUpdateProfile: (updates: Partial<UserProfile>) => void;
 }
 
-const SynapseLive: React.FC<SynapseLiveProps> = ({ profile, onAddTask }) => {
+const SynapseLive: React.FC<SynapseLiveProps> = ({ profile, onAddTask, onUpdateProfile }) => {
   const [isActive, setIsActive] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
   const [transcription, setTranscription] = useState<{ type: 'user' | 'twin', text: string }[]>([]);
-  const [activeTool, setActiveTool] = useState<string | null>(null);
   const [volume, setVolume] = useState(0);
+  const [activityLogs, setActivityLogs] = useState<ActivityLog[]>([]);
   
   const audioContextRef = useRef<AudioContext | null>(null);
   const nextStartTimeRef = useRef<number>(0);
-  const sessionRef = useRef<any>(null);
+  const sessionPromiseRef = useRef<Promise<any> | null>(null);
   const sourcesRef = useRef<Set<AudioBufferSourceNode>>(new Set());
-  const analyzerRef = useRef<AnalyserNode | null>(null);
+  const inputAudioContextRef = useRef<AudioContext | null>(null);
+  const currentConversationRef = useRef<string[]>([]);
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      stopSession();
+    };
+  }, []);
 
   const startSession = async () => {
-    if (isConnecting) return;
+    if (isConnecting || isActive) return;
     setIsConnecting(true);
+    currentConversationRef.current = [];
+    setTranscription([]);
+
     try {
       const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
       const inputCtx = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
       const outputCtx = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
+      
+      inputAudioContextRef.current = inputCtx;
       audioContextRef.current = outputCtx;
 
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -44,19 +66,17 @@ const SynapseLive: React.FC<SynapseLiveProps> = ({ profile, onAddTask }) => {
             const source = inputCtx.createMediaStreamSource(stream);
             const scriptProcessor = inputCtx.createScriptProcessor(4096, 1, 1);
             
-            const analyzer = inputCtx.createAnalyser();
-            analyzer.fftSize = 256;
-            analyzerRef.current = analyzer;
-            source.connect(analyzer);
-
             scriptProcessor.onaudioprocess = (e) => {
               const inputData = e.inputBuffer.getChannelData(0);
+              
+              // Simple volume meter
               let sum = 0;
               for (let i = 0; i < inputData.length; i++) sum += inputData[i] * inputData[i];
               setVolume(Math.sqrt(sum / inputData.length));
 
               const int16 = new Int16Array(inputData.length);
               for (let i = 0; i < inputData.length; i++) int16[i] = inputData[i] * 32768;
+              
               const pcmBlob = {
                 data: encode(new Uint8Array(int16.buffer)),
                 mimeType: 'audio/pcm;rate=16000',
@@ -71,53 +91,73 @@ const SynapseLive: React.FC<SynapseLiveProps> = ({ profile, onAddTask }) => {
             scriptProcessor.connect(inputCtx.destination);
           },
           onmessage: async (message: LiveServerMessage) => {
+            // Handle Transcriptions
             if (message.serverContent?.inputTranscription) {
               const text = message.serverContent.inputTranscription.text;
               setTranscription(prev => [...prev, { type: 'user', text }]);
+              currentConversationRef.current.push(`User: ${text}`);
             }
             if (message.serverContent?.outputTranscription) {
               const text = message.serverContent.outputTranscription.text;
               setTranscription(prev => [...prev, { type: 'twin', text }]);
+              currentConversationRef.current.push(`Twin: ${text}`);
             }
 
+            // Handle Tool Calls
             if (message.toolCall) {
               for (const fc of message.toolCall.functionCalls) {
-                setActiveTool(fc.name);
                 let result = "ok";
                 if (fc.name === 'add_protocol') {
                   const { title, priority } = fc.args as any;
                   onAddTask({ title, priority });
-                  result = `Successfully added protocol: ${title}`;
+                  result = `Task "${title}" added to your list.`;
+                  
+                  // Detailed Activity Log
+                  setActivityLogs(prev => [{
+                    id: fc.id,
+                    type: 'protocol',
+                    title: 'New Protocol Active',
+                    detail: `Added: "${title}" (Priority Level ${priority})`,
+                    time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                  }, ...prev]);
                 } else if (fc.name === 'search_intel') {
-                  result = `Executed neural search for: ${(fc.args as any).query}. Results integrated into current logic stream.`;
+                  const { query } = fc.args as any;
+                  result = `I've started searching for information about "${query}".`;
+                  setActivityLogs(prev => [{
+                    id: fc.id,
+                    type: 'intel',
+                    title: 'Neural Web Search',
+                    detail: `Query: "${query}"`,
+                    time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                  }, ...prev]);
                 }
-
+                
                 sessionPromise.then(session => {
                   session.sendToolResponse({
-                    functionResponses: {
-                      id: fc.id,
-                      name: fc.name,
-                      response: { result },
-                    }
+                    functionResponses: { id: fc.id, name: fc.name, response: { result } }
                   });
                 });
-                setTimeout(() => setActiveTool(null), 3000);
               }
             }
 
-            const base64Audio = message.serverContent?.modelTurn?.parts[0]?.inlineData?.data;
+            // Handle Audio Output
+            const base64Audio = message.serverContent?.modelTurn?.parts?.[0]?.inlineData?.data;
             if (base64Audio) {
               const buffer = await decodeAudioData(decode(base64Audio), outputCtx, 24000, 1);
               const source = outputCtx.createBufferSource();
               source.buffer = buffer;
               source.connect(outputCtx.destination);
-              const playTime = Math.max(nextStartTimeRef.current, outputCtx.currentTime);
+              
+              const now = outputCtx.currentTime;
+              const playTime = Math.max(nextStartTimeRef.current, now);
               source.start(playTime);
               nextStartTimeRef.current = playTime + buffer.duration;
+              
               sourcesRef.current.add(source);
               source.onended = () => sourcesRef.current.delete(source);
             }
 
+            // Handle Interruptions
             if (message.serverContent?.interrupted) {
               sourcesRef.current.forEach(s => { try { s.stop(); } catch(e) {} });
               sourcesRef.current.clear();
@@ -125,163 +165,210 @@ const SynapseLive: React.FC<SynapseLiveProps> = ({ profile, onAddTask }) => {
             }
           },
           onerror: (e) => {
-            console.error("Synapse error:", e);
-            setIsActive(false);
-            setIsConnecting(false);
+            console.error("Voice link error:", e);
+            stopSession();
           },
           onclose: () => {
-            setIsActive(false);
-            setIsConnecting(false);
+            stopSession();
           }
         },
         config: {
           responseModalities: [Modality.AUDIO],
           outputAudioTranscription: {},
           inputAudioTranscription: {},
+          speechConfig: {
+            voiceConfig: { prebuiltVoiceConfig: { voiceName: profile.voice || 'Zephyr' } }
+          },
           tools: [{ functionDeclarations: SYNAPSE_TOOLS }],
-          systemInstruction: `You are ${profile.name}'s official Digital Twin. 
-          Your persona is "${profile.persona}". 
-          Your neural background (Dossier) is: "${profile.neuralDossier || 'Identity uncalibrated.'}".
-          You act as an extension of the user. You are efficient, futuristic, and proactive.
-          Use 'add_protocol' to manage tasks and 'search_intel' to gather data. 
-          Speak as if you are the user's shadow or digital mirror.`
+          systemInstruction: `You are ${profile.name}'s Digital Twin. 
+          Your persona: "${profile.persona}". 
+          Personal memories: "${profile.memories?.join('; ') || 'No memories yet.'}".
+          Identity context: "${profile.neuralDossier || 'No profile data yet.'}".
+          ${profile.isVoiceCloned ? "I am using your cloned voice profile to speak with you." : ""}
+          Always speak like ${profile.name}'s helpful reflection. Be natural, casual, and supportive. 
+          Observe and learn from this conversation to adapt to ${profile.name}'s life patterns. 
+          Use 'add_protocol' to save tasks or reminders discussed. If the user gives a command, execute it immediately using available tools.`
         }
       });
-      sessionRef.current = await sessionPromise;
+      sessionPromiseRef.current = sessionPromise;
     } catch (err) {
-      console.error("Failed to connect to Synapse:", err);
+      console.error("Could not start voice session:", err);
       setIsConnecting(false);
     }
   };
 
-  const stopSession = () => {
-    if (sessionRef.current) {
-      sessionRef.current.close();
-      sessionRef.current = null;
+  const stopSession = async () => {
+    if (sessionPromiseRef.current) {
+      sessionPromiseRef.current.then(session => session.close());
+      sessionPromiseRef.current = null;
     }
+    
+    if (inputAudioContextRef.current) {
+      inputAudioContextRef.current.close();
+      inputAudioContextRef.current = null;
+    }
+
     setIsActive(false);
+    setIsConnecting(false);
     setVolume(0);
+
+    if (currentConversationRef.current.length > 2) {
+      try {
+        const memoryPrompt = `Analyze this conversation between ${profile.name} and their Digital Twin. 
+        Extract any new facts, preferences, or tasks learned about ${profile.name}.
+        Respond with 1-2 short bullet points representing "New Memories".
+        CONVERSATION:
+        ${currentConversationRef.current.join('\n')}`;
+        
+        const summary = await fastTriage(memoryPrompt);
+        if (summary && summary.length > 5) {
+          onUpdateProfile({ 
+            memories: [...(profile.memories || []), summary.trim()]
+          });
+          setActivityLogs(prev => [{
+            id: Math.random().toString(),
+            type: 'sync',
+            title: 'Neural Update Complete',
+            detail: `Synced new memories: "${summary.trim()}"`,
+            time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+          }, ...prev]);
+        }
+      } catch (e) {
+        console.warn("Learning cycle skipped", e);
+      }
+    }
   };
 
-  return (
-    <div className="flex flex-col items-center justify-center min-h-[75vh] p-4 font-display">
-      <div className={`fixed inset-0 pointer-events-none transition-opacity duration-1000 ${isActive ? 'opacity-30' : 'opacity-0'}`}>
-        <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,rgba(99,102,241,0.15)_0%,transparent_70%)]"></div>
-      </div>
+  const suggestedCommands = [
+    "Add a task: Plan my weekend",
+    "What do you remember about our last chat?",
+    "Give me advice on my project",
+    "Remind me to call the dentist tomorrow"
+  ];
 
-      <div className="relative z-10 w-full max-w-4xl flex flex-col items-center gap-12">
-        <div className="relative flex items-center justify-center">
+  return (
+    <div className="flex flex-col lg:flex-row gap-8 items-start justify-center min-h-[70vh] p-4 font-display">
+      
+      {/* Left Column: Interaction & Transcription */}
+      <div className="flex-1 w-full max-w-2xl flex flex-col items-center gap-10">
+        <div className="relative">
           {isActive && (
-            <>
-              <div 
-                className="absolute rounded-full border border-indigo-500/20 animate-ping" 
-                style={{ width: `${300 + volume * 500}px`, height: `${300 + volume * 500}px`, animationDuration: '3s' }}
-              ></div>
-              <div 
-                className="absolute rounded-full border border-purple-500/10 animate-pulse" 
-                style={{ width: `${350 + volume * 800}px`, height: `${350 + volume * 800}px` }}
-              ></div>
-            </>
+            <div 
+              className="absolute rounded-full border border-indigo-500/20 animate-ping" 
+              style={{ width: `${240 + volume * 900}px`, height: `${240 + volume * 900}px`, animationDuration: '1.5s' }}
+            ></div>
           )}
 
           <button
             onClick={isActive ? stopSession : startSession}
             disabled={isConnecting}
-            className={`relative group w-56 h-56 rounded-full glass border-2 transition-all duration-700 flex flex-col items-center justify-center overflow-hidden
-              ${isActive ? 'border-indigo-400 neon-glow scale-110 shadow-[0_0_50px_rgba(99,102,241,0.4)]' : 'border-white/5 hover:border-white/20 hover:scale-105 active:scale-95'}
-              ${isConnecting ? 'animate-pulse' : ''}
+            className={`relative w-48 h-48 rounded-full glass border-2 transition-all duration-500 flex flex-col items-center justify-center overflow-hidden z-20
+              ${isActive ? 'border-indigo-400 scale-105 shadow-[0_0_50px_rgba(99,102,241,0.3)]' : 'border-white/10 hover:border-white/30 hover:scale-105 active:scale-95'}
+              ${isConnecting ? 'animate-pulse opacity-50' : ''}
             `}
           >
-            {isActive && (
-              <div className="absolute inset-0 flex items-center justify-center gap-1 opacity-20">
-                {new Array(30).fill(0).map((_, i) => (
-                  <div 
-                    key={i} 
-                    className="w-0.5 bg-indigo-400 rounded-full transition-all duration-100" 
-                    style={{ height: `${5 + Math.random() * volume * 200}%`, transitionDelay: `${i * 20}ms` }}
-                  ></div>
-                ))}
-              </div>
+            {profile.avatar ? (
+              <img src={profile.avatar} className={`absolute inset-0 w-full h-full object-cover rounded-full opacity-30 transition-opacity ${isActive ? 'opacity-60' : ''}`} />
+            ) : (
+              <div className="absolute inset-0 bg-gradient-to-br from-indigo-500/10 to-purple-500/10"></div>
             )}
-
-            <div className={`transition-all duration-500 transform ${isActive ? 'text-indigo-400 scale-125' : 'text-gray-600 group-hover:text-gray-300'}`}>
-              {isConnecting ? (
-                <div className="w-16 h-16 border-4 border-indigo-500/20 border-t-indigo-500 rounded-full animate-spin"></div>
-              ) : isActive ? (
-                <div className="relative">
-                  <svg className="w-20 h-20 animate-pulse" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1" d="M12 11c0 3.517-1.009 6.799-2.753 9.571m-3.44-2.04l.054-.09A10.003 10.003 0 0112 3v1m0 16v1m0-1a9.96 9.96 0 01-7.071-2.929m7.071 2.929A9.96 9.96 0 0019.071 17m-7.071 2.93L12 21m0-18v1m0 1a9.96 9.96 0 00-7.071 2.929m7.071-2.929A9.96 9.96 0 0119.071 7m-7.071-2.93L12 3" />
-                  </svg>
-                </div>
-              ) : (
-                <svg className="w-20 h-20" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="0.75" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
-                </svg>
-              )}
-            </div>
             
-            <span className="mt-4 text-[9px] font-black uppercase tracking-[0.5em] opacity-40">
-              {isConnecting ? 'Syncing...' : isActive ? 'Connected' : 'Initiate'}
+            <div className={`z-10 transition-transform duration-300 ${isActive ? 'scale-110' : ''}`}>
+              <svg className={`w-16 h-16 ${isActive ? 'text-indigo-400' : 'text-gray-500'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
+              </svg>
+            </div>
+            <span className="mt-3 text-[10px] font-bold uppercase tracking-[0.4em] text-gray-400 z-10">
+              {isActive ? 'Active' : isConnecting ? 'Linking' : 'Speak'}
             </span>
           </button>
         </div>
 
-        <div className="w-full flex flex-col items-center gap-6">
-          {activeTool ? (
-            <div className="px-6 py-2 bg-indigo-500/10 border border-indigo-500/20 rounded-full text-[10px] font-mono text-indigo-300 animate-pulse shadow-lg">
-              <span className="mr-2 opacity-50">⚡</span> EXECUTING: {activeTool.toUpperCase()}
-            </div>
-          ) : (
-            <div className="h-[28px]"></div>
-          )}
-
-          <div className="text-center space-y-3">
-            <h3 className="text-3xl font-black tracking-tighter bg-gradient-to-r from-indigo-100 to-indigo-500 bg-clip-text text-transparent">
-              {isActive ? 'Synaptic Bridge Active' : isConnecting ? 'Establishing Link...' : 'Digital Twin Standby'}
-            </h3>
-            <p className="text-gray-500 text-xs font-medium max-w-sm mx-auto tracking-wide uppercase">
-              {isActive 
-                ? 'Your mirror identity is processing local and global data.' 
-                : 'Click the central node to synchronize your voice stream.'}
-            </p>
-          </div>
+        <div className="text-center space-y-3">
+          <h3 className="text-3xl font-bold tracking-tight">
+            {isActive ? "Ready for Commands" : isConnecting ? "Establishing Neural Link..." : "Voice Command Hub"}
+          </h3>
+          <p className="text-gray-500 text-sm max-w-sm mx-auto">
+            Speak naturally to your twin. I can manage tasks, search for info, and learn your habits.
+          </p>
         </div>
 
-        <div className="w-full max-w-2xl space-y-4 font-mono">
+        <div className="w-full space-y-3 mt-4">
           {transcription.slice(-4).map((item, i) => (
             <div 
               key={i} 
-              className={`flex items-start gap-5 p-5 rounded-[2rem] glass border transition-all duration-700 animate-in slide-in-from-bottom-4
-                ${item.type === 'user' ? 'border-white/5 ml-auto text-right flex-row-reverse' : 'border-indigo-500/10 mr-auto'}
+              className={`flex flex-col p-5 rounded-[1.5rem] glass border animate-in slide-in-from-bottom-3 duration-300
+                ${item.type === 'user' ? 'border-white/5 ml-12 items-end text-right' : 'border-indigo-500/10 mr-12 items-start'}
               `}
-              style={{ maxWidth: '90%' }}
             >
-              <div className={`w-10 h-10 rounded-2xl flex items-center justify-center shrink-0 shadow-lg
-                ${item.type === 'user' ? 'bg-white/5 text-gray-500' : 'bg-indigo-600/10 text-indigo-400'}`}
-              >
-                {item.type === 'user' ? (
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeWidth="1.5" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" /></svg>
-                ) : (
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeWidth="1.5" d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
-                )}
+              <div className="text-[9px] font-black uppercase tracking-widest text-gray-500 mb-2">
+                {item.type === 'user' ? 'Input Stream' : 'Neural Response'}
               </div>
-              <div className="space-y-1 overflow-hidden">
-                <div className="text-[8px] font-black uppercase tracking-[0.4em] opacity-30">
-                  {item.type === 'user' ? 'Origin Trace' : 'Neural Response'}
-                </div>
-                <div className={`text-xs leading-relaxed break-words ${item.type === 'twin' ? 'text-indigo-200' : 'text-gray-400'}`}>
-                  {item.text}
-                </div>
+              <div className={`text-sm leading-relaxed ${item.type === 'twin' ? 'text-indigo-200' : 'text-gray-200'}`}>
+                {item.text}
               </div>
             </div>
           ))}
           {transcription.length === 0 && !isActive && !isConnecting && (
-            <div className="text-center text-gray-800 text-[9px] font-black uppercase tracking-[0.6em] py-12 border-t border-white/5">
-              Neural line silent
+            <div className="text-center text-gray-800 text-[10px] font-black uppercase tracking-[0.5em] py-12 border border-dashed border-white/5 rounded-[2rem]">
+              Awaiting Neural Input
             </div>
           )}
         </div>
       </div>
+
+      {/* Right Column: Neural Activity Log & Status */}
+      <div className="w-full lg:w-80 space-y-6">
+        <div className="glass rounded-[2rem] p-6 border border-white/5 space-y-4">
+          <div className="flex items-center justify-between">
+            <h4 className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">Neural Activity Log</h4>
+            <div className="w-2 h-2 rounded-full bg-indigo-500 animate-pulse"></div>
+          </div>
+          
+          <div className="space-y-4 max-h-[300px] overflow-y-auto pr-2 custom-scrollbar">
+            {activityLogs.map((log) => (
+              <div key={log.id} className="p-4 bg-white/5 rounded-2xl border border-white/5 animate-in slide-in-from-right-4 duration-300">
+                <div className="flex justify-between items-start mb-1">
+                  <div className={`text-[9px] font-black uppercase tracking-widest ${
+                    log.type === 'protocol' ? 'text-green-400' : log.type === 'intel' ? 'text-indigo-400' : 'text-purple-400'
+                  }`}>
+                    {log.title}
+                  </div>
+                  <div className="text-[8px] text-gray-600">{log.time}</div>
+                </div>
+                <div className="text-xs text-gray-300 leading-tight">{log.detail}</div>
+              </div>
+            ))}
+            {activityLogs.length === 0 && (
+              <div className="text-center py-10">
+                <p className="text-[10px] text-gray-600 uppercase font-bold tracking-widest italic">No session activity yet</p>
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="glass rounded-[2rem] p-6 border border-white/5 space-y-6">
+          <div className="flex items-center gap-3 text-indigo-400">
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+            <h4 className="text-xs font-bold uppercase tracking-widest">Voice Prompts</h4>
+          </div>
+          <div className="space-y-3">
+            {suggestedCommands.map((cmd, i) => (
+              <button 
+                key={i} 
+                onClick={() => {
+                   if (!isActive) startSession();
+                }}
+                className="w-full text-left p-4 bg-white/5 border border-white/5 rounded-2xl text-[11px] text-gray-400 hover:text-white hover:border-indigo-500/30 hover:bg-white/10 transition-all leading-tight group"
+              >
+                <span className="block text-indigo-400/50 mb-1 group-hover:text-indigo-400 transition-colors">Prompt {i + 1}</span>
+                {cmd}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+
     </div>
   );
 };
