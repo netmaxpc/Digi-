@@ -1,0 +1,9 @@
+{
+  "name": "Ego-Link: Your Digital Twin",
+  "description": "A high-performance digital twin application that manages your schedule, communications, and creative output using the latest Gemini AI models.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone",
+    "geolocation"
+  ]
+}
