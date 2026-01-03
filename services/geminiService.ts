@@ -4,62 +4,52 @@ import { GoogleGenAI, Type, Modality, FunctionDeclaration } from "@google/genai"
 const getClient = () => new GoogleGenAI({ apiKey: process.env.API_KEY });
 
 /**
- * Multimodal Understanding using Gemini 3 Flash (Accessible Tier)
+ * Multimodal Understanding using Gemini 3 Flash
  */
 export async function analyzeMultimodal(prompt: string, fileData: string, mimeType: string): Promise<string> {
-  try {
-    const ai = getClient();
-    const response = await ai.models.generateContent({
-      model: 'gemini-3-flash-preview',
-      contents: {
-        parts: [
-          { inlineData: { data: fileData.split(',')[1], mimeType } },
-          { text: prompt }
-        ]
-      }
-    });
-    return response.text || "Analysis failed to materialize.";
-  } catch (err) {
-    console.error("Multimodal error:", err);
-    throw err;
-  }
+  const ai = getClient();
+  const response = await ai.models.generateContent({
+    model: 'gemini-3-flash-preview',
+    contents: {
+      parts: [
+        { inlineData: { data: fileData.split(',')[1], mimeType } },
+        { text: prompt }
+      ]
+    }
+  });
+  return response.text || "Analysis failed.";
 }
 
 /**
- * Complex Reasoning using Gemini 3 Pro with high thinking budget
- * Updated to use gemini-3-pro-preview and max thinking budget for complex logic.
+ * Complex Reasoning using Gemini 3 Pro (Thinking Mode)
  */
 export async function solveComplexProblem(prompt: string): Promise<string> {
-  try {
-    const ai = getClient();
-    const response = await ai.models.generateContent({
-      model: 'gemini-3-pro-preview',
-      contents: prompt,
-      config: {
-        thinkingConfig: { thinkingBudget: 32768 } // Max reasoning for complex tasks as per UI requirements
-      }
-    });
-    return response.text || "Neural pathways congested.";
-  } catch (err) {
-    console.error("Reasoning error:", err);
-    throw err;
-  }
+  const ai = getClient();
+  const response = await ai.models.generateContent({
+    model: 'gemini-3-pro-preview',
+    contents: prompt,
+    config: {
+      thinkingConfig: { thinkingBudget: 32768 }
+    }
+  });
+  return response.text || "Reasoning failed.";
 }
 
 /**
- * Low Latency Quick Response using Gemini 2.5 Flash Lite
+ * Low Latency Response
  */
 export async function fastTriage(prompt: string): Promise<string> {
   const ai = getClient();
+  // Using corrected model name for flash lite as per guidelines
   const response = await ai.models.generateContent({
-    model: 'gemini-2.5-flash-lite-latest',
+    model: 'gemini-flash-lite-latest',
     contents: prompt,
   });
-  return response.text || "Quick sync failed.";
+  return response.text || "";
 }
 
 /**
- * Search Grounding using Gemini 3 Flash
+ * Search Grounding
  */
 export async function performResearch(query: string): Promise<{ text: string; sources: { title: string; uri: string }[] }> {
   const ai = getClient();
@@ -71,7 +61,7 @@ export async function performResearch(query: string): Promise<{ text: string; so
     }
   });
 
-  const text = response.text || "No data retrieved.";
+  const text = response.text || "";
   const sources: { title: string; uri: string }[] = [];
   const chunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks;
   if (chunks) {
@@ -83,27 +73,22 @@ export async function performResearch(query: string): Promise<{ text: string; so
 }
 
 /**
- * Maps Grounding using Gemini 2.5 Flash
+ * Maps Grounding
  */
 export async function performMapsSearch(query: string, location?: { latitude: number, longitude: number }): Promise<{ text: string; sources: { title: string; uri: string }[] }> {
   const ai = getClient();
   const config: any = {
     tools: [{ googleMaps: {} }],
   };
-
   if (location) {
-    config.toolConfig = {
-      retrievalConfig: { latLng: location }
-    };
+    config.toolConfig = { retrievalConfig: { latLng: location } };
   }
-
   const response = await ai.models.generateContent({
     model: 'gemini-2.5-flash',
     contents: query,
     config,
   });
-
-  const text = response.text || "No local data found.";
+  const text = response.text || "";
   const sources: { title: string; uri: string }[] = [];
   const chunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks;
   if (chunks) {
@@ -115,33 +100,25 @@ export async function performMapsSearch(query: string, location?: { latitude: nu
 }
 
 /**
- * Image Generation using Gemini 2.5 Flash Image (Standard Tier)
+ * Image Generation (Flash Image)
  */
 export async function generateCreativeImage(prompt: string): Promise<string | null> {
-  try {
-    const ai = getClient();
-    const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash-image',
-      contents: { parts: [{ text: prompt }] },
-      config: {
-        imageConfig: { aspectRatio: "1:1" }
-      }
-    });
-
-    if (response.candidates?.[0]?.content?.parts) {
-      for (const part of response.candidates[0].content.parts) {
-        if (part.inlineData) return `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
-      }
+  const ai = getClient();
+  const response = await ai.models.generateContent({
+    model: 'gemini-2.5-flash-image',
+    contents: { parts: [{ text: prompt }] },
+    config: { imageConfig: { aspectRatio: "1:1" } }
+  });
+  if (response.candidates?.[0]?.content?.parts) {
+    for (const part of response.candidates[0].content.parts) {
+      if (part.inlineData) return `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
     }
-    return null;
-  } catch (err) {
-    console.error("Image generation error:", err);
-    throw err;
   }
+  return null;
 }
 
 /**
- * Image Editing using Gemini 2.5 Flash Image
+ * Image Editing (Flash Image)
  */
 export async function editImage(prompt: string, base64Image: string, mimeType: string): Promise<string | null> {
   const ai = getClient();
@@ -154,7 +131,6 @@ export async function editImage(prompt: string, base64Image: string, mimeType: s
       ]
     }
   });
-
   if (response.candidates?.[0]?.content?.parts) {
     for (const part of response.candidates[0].content.parts) {
       if (part.inlineData) return `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
@@ -164,7 +140,7 @@ export async function editImage(prompt: string, base64Image: string, mimeType: s
 }
 
 /**
- * Text to Speech Generation using Gemini 2.5 Flash TTS
+ * Text to Speech
  */
 export async function speakResponse(text: string): Promise<void> {
   const ai = getClient();
@@ -178,7 +154,6 @@ export async function speakResponse(text: string): Promise<void> {
       },
     },
   });
-
   const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
   if (base64Audio) {
     const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
@@ -191,47 +166,46 @@ export async function speakResponse(text: string): Promise<void> {
 }
 
 /**
- * Video Generation using Veo 3.1 Fast
- * Added generateVeoVideo to support cinematic video creation.
+ * Video Generation (Veo)
  */
 export async function generateVeoVideo(prompt: string, image?: string, aspectRatio: '16:9' | '9:16' = '16:9'): Promise<string | null> {
-  // Create a new GoogleGenAI instance right before the call to ensure current API key
+  // Creating a new instance right before call as per guidelines
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-  
-  try {
-    let operation = await ai.models.generateVideos({
-      model: 'veo-3.1-fast-generate-preview',
-      prompt: prompt || 'A cinematic high-quality video',
-      image: image ? {
-        imageBytes: image.split(',')[1],
-        mimeType: image.split(',')[0].split(':')[1].split(';')[0]
-      } : undefined,
-      config: {
-        numberOfVideos: 1,
-        resolution: '720p',
-        aspectRatio: aspectRatio
-      }
-    });
-
-    while (!operation.done) {
-      await new Promise(resolve => setTimeout(resolve, 10000));
-      operation = await ai.operations.getVideosOperation({ operation: operation });
-    }
-
-    const downloadLink = operation.response?.generatedVideos?.[0]?.video?.uri;
-    if (!downloadLink) return null;
-
-    // Must append API key when fetching from the download link
-    const response = await fetch(`${downloadLink}&key=${process.env.API_KEY}`);
-    const blob = await response.blob();
-    return URL.createObjectURL(blob);
-  } catch (err: any) {
-    console.error("Veo generation error:", err);
-    throw err;
+  let operation = await ai.models.generateVideos({
+    model: 'veo-3.1-fast-generate-preview',
+    prompt: prompt || 'A cinematic high-quality video',
+    image: image ? {
+      imageBytes: image.split(',')[1],
+      mimeType: image.split(',')[0].split(':')[1].split(';')[0]
+    } : undefined,
+    config: { numberOfVideos: 1, resolution: '720p', aspectRatio: aspectRatio }
+  });
+  while (!operation.done) {
+    await new Promise(resolve => setTimeout(resolve, 10000));
+    operation = await ai.operations.getVideosOperation({ operation: operation });
   }
+  const downloadLink = operation.response?.generatedVideos?.[0]?.video?.uri;
+  if (!downloadLink) return null;
+  const response = await fetch(`${downloadLink}&key=${process.env.API_KEY}`);
+  const blob = await response.blob();
+  return URL.createObjectURL(blob);
+}
+
+/**
+ * Identity Harvesting (Simulation using Search)
+ */
+export async function harvestIdentity(name: string): Promise<string> {
+  const ai = getClient();
+  const response = await ai.models.generateContent({
+    model: 'gemini-3-flash-preview',
+    contents: `Compile a comprehensive digital footprint dossier for "${name}". Research public professional profiles, social media influence, interests, and public communication style. Return a summary formatted as a "Neural Identity Profile".`,
+    config: { tools: [{ googleSearch: {} }] }
+  });
+  return response.text || "No public footprint found.";
 }
 
 // Audio Utilities
+// decode manually implements base64 to bytes conversion
 export function decode(base64: string) {
   const binaryString = atob(base64);
   const bytes = new Uint8Array(binaryString.length);
@@ -241,6 +215,7 @@ export function decode(base64: string) {
   return bytes;
 }
 
+// encode manually implements bytes to base64 conversion
 export function encode(bytes: Uint8Array) {
   let binary = '';
   for (let i = 0; i < bytes.byteLength; i++) {
@@ -249,6 +224,7 @@ export function encode(bytes: Uint8Array) {
   return btoa(binary);
 }
 
+// decodeAudioData decodes raw PCM audio bytes to AudioBuffer
 export async function decodeAudioData(data: Uint8Array, ctx: AudioContext, sampleRate: number, numChannels: number): Promise<AudioBuffer> {
   const dataInt16 = new Int16Array(data.buffer);
   const frameCount = dataInt16.length / numChannels;
@@ -273,6 +249,17 @@ export const SYNAPSE_TOOLS: FunctionDeclaration[] = [
         priority: { type: Type.NUMBER },
       },
       required: ['title', 'priority'],
+    },
+  },
+  {
+    name: 'search_intel',
+    parameters: {
+      type: Type.OBJECT,
+      description: 'Search for information on the web.',
+      properties: {
+        query: { type: Type.STRING },
+      },
+      required: ['query'],
     },
   }
 ];

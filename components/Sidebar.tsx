@@ -19,37 +19,49 @@ const Sidebar: React.FC<SidebarProps> = ({ currentView, setView }) => {
   ];
 
   return (
-    <div className="w-64 h-screen glass border-r border-indigo-500/20 flex flex-col p-4 fixed left-0 top-0 hidden md:flex">
-      <div className="flex items-center gap-3 mb-10 px-2">
-        <div className="w-10 h-10 rounded-xl bg-indigo-600 flex items-center justify-center neon-glow">
-          <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
+    <div className="w-64 h-screen glass border-r border-indigo-500/20 flex flex-col p-6 fixed left-0 top-0 hidden md:flex z-40">
+      <div className="flex items-center gap-3 mb-12 px-2">
+        <div className="w-10 h-10 rounded-2xl bg-indigo-600 flex items-center justify-center neon-glow shadow-[0_0_15px_rgba(99,102,241,0.5)]">
+          <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
         </div>
-        <h1 className="font-bold text-xl tracking-tight bg-gradient-to-r from-indigo-400 to-purple-400 bg-clip-text text-transparent">Ego-Link</h1>
+        <div>
+          <h1 className="font-black text-xl tracking-tighter bg-gradient-to-br from-indigo-300 to-purple-500 bg-clip-text text-transparent">EGO-LINK</h1>
+          <div className="text-[8px] font-bold text-gray-600 uppercase tracking-[0.3em]">Neural OS v4.1</div>
+        </div>
       </div>
       
-      <nav className="flex-1 space-y-2">
+      <nav className="flex-1 space-y-1">
         {navItems.map((item) => (
           <button
             key={item.id}
             onClick={() => setView(item.id)}
-            className={`w-full flex items-center gap-4 px-4 py-3 rounded-lg transition-all duration-200 ${
+            className={`w-full flex items-center gap-4 px-4 py-3.5 rounded-2xl transition-all duration-300 group ${
               currentView === item.id 
-                ? 'bg-indigo-600/20 text-indigo-400 border border-indigo-500/30 shadow-lg shadow-indigo-500/5' 
-                : 'text-gray-400 hover:bg-white/5 hover:text-gray-200'
+                ? 'bg-indigo-600/10 text-indigo-400 border border-indigo-500/30 shadow-xl' 
+                : 'text-gray-500 hover:bg-white/5 hover:text-gray-300'
             }`}
           >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg className={`w-5 h-5 transition-transform duration-300 ${currentView === item.id ? 'scale-110' : 'group-hover:scale-110'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d={item.icon} />
             </svg>
-            <span className="font-medium text-sm">{item.label}</span>
+            <span className="font-bold text-[11px] uppercase tracking-widest">{item.label}</span>
           </button>
         ))}
       </nav>
 
-      <div className="mt-auto p-4 glass rounded-xl border border-indigo-500/10">
-        <div className="flex items-center gap-3">
-          <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></div>
-          <span className="text-xs font-semibold text-gray-400 uppercase tracking-widest text-center">Neural Core Active</span>
+      <div className="mt-auto space-y-4">
+        <div className="p-5 glass rounded-3xl border border-indigo-500/10 space-y-3">
+          <div className="flex items-center justify-between">
+            <span className="text-[9px] font-bold text-gray-500 uppercase tracking-widest">Neural Load</span>
+            <span className="text-[9px] font-bold text-indigo-400 uppercase tracking-widest">Minimal</span>
+          </div>
+          <div className="h-1 bg-white/5 rounded-full overflow-hidden">
+            <div className="h-full bg-indigo-500 w-[15%] rounded-full shadow-[0_0_10px_#6366f1]"></div>
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse"></div>
+            <span className="text-[9px] font-black text-gray-400 uppercase tracking-[0.2em]">Core Stable</span>
+          </div>
         </div>
       </div>
     </div>
